@@ -52,7 +52,7 @@ Special thanks to ggml-org for [llama.cpp](https://github.com/ggml-org/llama.cpp
 
 ## Requirements
 
-- Python 3.9+, `pip`, and virtual environment support (or [uv](https://astral.sh/uv), which the installers and the in-app updater detect and use automatically)
+- Python 3.9+ with `pip` and virtual environment support (`python -m venv`); macOS/Linux setup can also use [uv](https://astral.sh/uv) to create the environment and install dependencies
 - Internet access for release downloads, optional app updates, and optional Chat web search
 - A supported OS/architecture for the prebuilt `llama.cpp` binaries you want
 
@@ -90,7 +90,11 @@ Install dependencies:
 - macOS/Linux: `./install.sh`
 - Windows: `windows_install.bat`
 
-If [uv](https://astral.sh/uv) is on PATH, setup uses it automatically — the venv is created with `uv venv --seed` and requirements are installed with `uv pip install`. The in-app updater prefers uv the same way. The plain `pip` flow remains fully supported.
+On macOS/Linux, `install.sh` uses [uv](https://astral.sh/uv) automatically when it is on PATH: new environments are created with `uv venv --seed` (keeping pip available), and requirements are installed with `uv pip install`. The Windows installer (`windows_install.bat`) continues to use `python -m venv` and pip.
+
+The in-app updater on all platforms also prefers uv when it is on the app's PATH, installing dependencies into the Python environment running Llama GUI. Both `install.sh` and the updater use pip when uv is absent; a failed uv command is reported as an error and is not automatically retried with pip.
+
+If you use a custom package mirror or other pip settings, configure uv separately: it does not read `pip.conf` or pip-specific environment variables such as `PIP_INDEX_URL`. Use the corresponding uv settings (for example, `UV_INDEX_URL`), or run the installer/app with uv absent from its PATH to retain pip behavior. See [uv's pip compatibility documentation](https://docs.astral.sh/uv/pip/compatibility/#configuration-files-and-environment-variables).
 
 If macOS/Linux reports `permission denied`, restore the executable bit:
 
