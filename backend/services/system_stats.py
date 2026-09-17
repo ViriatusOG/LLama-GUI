@@ -1130,6 +1130,9 @@ _AMD_TEMP_KEYS = (
     "gpu_edge_temp",
     "temperature",
     "temp_edge",
+    # amd-smi 26.x nests sensors under "temperature": {"edge": {...}, ...}
+    "edge",
+    "hotspot",
 )
 _AMD_MEM_KEYS = (
     "vram_mem_usage",
@@ -1140,8 +1143,9 @@ _AMD_MEM_KEYS = (
 )
 _AMD_BDF_KEYS = ("bdf", "pci_bdf", "pci_bus_id", "pcie_bdf")
 _AMD_UUID_KEYS = ("uuid",)
-_AMD_USED_KEYS = ("used", "used_memory")
-_AMD_TOTAL_KEYS = ("total", "total_memory")
+# amd-smi 26.x reports "used_vram"/"total_vram" inside "mem_usage".
+_AMD_USED_KEYS = ("used", "used_memory", "used_vram")
+_AMD_TOTAL_KEYS = ("total", "total_memory", "total_vram")
 
 _AMD_UNIT_MULTIPLIERS = {
     "": 1,
@@ -1245,8 +1249,12 @@ def _amd_memory_usage(node):
     """``(used_bytes, total_bytes)`` from whichever nesting a release uses."""
     usage = _amd_find_raw(node, _AMD_MEM_KEYS)
     if isinstance(usage, dict):
-        used = usage.get(_AMD_USED_KEYS[0], usage.get(_AMD_USED_KEYS[1]))
-        total = usage.get(_AMD_TOTAL_KEYS[0], usage.get(_AMD_TOTAL_KEYS[1]))
+        used = next(
+            (usage[k] for k in _AMD_USED_KEYS if k in usage), None
+        )
+        total = next(
+            (usage[k] for k in _AMD_TOTAL_KEYS if k in usage), None
+        )
         return amd_bytes(used), amd_bytes(total)
     return None, None
 
@@ -1333,6 +1341,66 @@ def parse_amd_smi_json(text):
     return devices
 
 
+# Product names never change while the process runs, and amd-smi is slow to
+# start, so the static probe runs once and its result is reused.
+_AMD_NAME_CACHE = None
+
+
+def _amd_static_info(executable):
+    """Map GPU index -> {name, bdf} from ``amd-smi static``.
+
+    ``amd-smi metric`` carries neither the product name nor the PCI address,
+    so both are fetched separately. Without the BDF a device would fall back
+    to an index-based id, which is not stable across hardware changes.
+    Failure is non-fatal: callers keep whatever the metric probe supplied.
+    """
+    global _AMD_NAME_CACHE
+    if _AMD_NAME_CACHE is not None:
+        return _AMD_NAME_CACHE
+
+    info = {}
+
+    def _collect(args, extract):
+        try:
+            result = subprocess.run(
+                [executable, "static", *args, "--json"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=AMD_PROBE_TIMEOUT_SECONDS,
+                shell=False,
+                creationflags=get_no_window_creationflags(),
+            )
+            if result.returncode != 0:
+                return
+            data = json.loads(result.stdout)
+            for index, node in enumerate(_amd_device_nodes(data)):
+                raw_index = node.get("gpu")
+                key = (
+                    raw_index
+                    if isinstance(raw_index, int) and not isinstance(raw_index, bool)
+                    else index
+                )
+                value = extract(node)
+                if value:
+                    info.setdefault(key, {}).update(value)
+        except (OSError, ValueError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+            _log_probe_failure("amd-smi static", exc)
+
+    _collect(
+        ["--asic"],
+        lambda node: {"name": _amd_find_string(node, _AMD_NAME_KEYS)},
+    )
+    _collect(
+        ["--bus"],
+        lambda node: {"bdf": _amd_find_string(node, _AMD_BDF_KEYS)},
+    )
+
+    _AMD_NAME_CACHE = info
+    return info
+
+
 def probe_amd(platform_name):
     """Return ``(status, devices, details)``.
 
@@ -1382,6 +1450,18 @@ def probe_amd(platform_name):
         )
     try:
         devices = parse_amd_smi_json(result.stdout)
+        static_info = _amd_static_info(executable)
+        for device in devices:
+            extra = static_info.get(device.get("index")) or {}
+            if not device.get("name") and extra.get("name"):
+                device["name"] = extra["name"]
+            # Upgrade an index-based id to the stable PCI address when the
+            # metric probe did not supply a uuid or bdf of its own.
+            if not device.get("id_persistent") and extra.get("bdf"):
+                bdf = _normalize_bdf(extra["bdf"])
+                if bdf is not None:
+                    device["id"] = f"amd:bdf:{bdf}"
+                    device["id_persistent"] = True
     except (json.JSONDecodeError, ValueError) as exc:
         _log_probe_failure("amd-smi", exc)
         return "error", [], _probe_details(
