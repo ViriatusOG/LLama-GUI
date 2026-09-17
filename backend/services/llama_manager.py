@@ -41,8 +41,8 @@ LEMONADE_STABLE_ROCM_REPO_API = (
     "https://api.github.com/repos/lemonade-sdk/llama.cpp/releases"
 )
 CUSTOM_BACKEND_SPECS = {
-    "custom": {"label": "Custom", "folder": "custom"},
-    "custom-02": {"label": "Custom 02", "folder": "custom-02"},
+    "custom": {"label": "Custom (Vulkan)", "folder": "custom"},
+    "custom-02": {"label": "CUDA", "folder": "custom-02"},
 }
 
 
